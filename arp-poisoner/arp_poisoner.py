@@ -4,6 +4,8 @@ from scapy.all import ARP, Ether, IP, DNS, HTTPRequest, srp, sendp, sniff
 import time
 import datetime
 import threading
+import argparse
+import sys
 
 def get_subnet():
     # Retrieve the default network interface's IPv4 info
@@ -148,8 +150,18 @@ def store_captured_traffic(packet):
 
 # Main function
 if __name__ == "__main__":
-    subnet = get_subnet()
-    live_hosts = scan_subnet(subnet)
+    args = parse_arguments()
+    if args.ip:
+        try:
+            ip = ipaddress.ip_address(args.ip)
+        except ValueError:
+            print("Invalid IP format")
+            sys.exit(1)
+    else:
+        subnet = get_subnet()
+        live_hosts = scan_subnet(subnet)
+    
+    
     attacker_mac, attacker_ipv4 = discover_attacker_info()
 
     # Get both the gateway IP and MAC
@@ -172,11 +184,41 @@ if __name__ == "__main__":
 '''
 
 NEEDS:
-1. Input validation for: choosing an IP to grab versus just a subnet
+1. Input validation for: choosing an IP to grab, or a range of IPs, versus just a subnet
 2. Input validation: choosing http or dns to capture.
 2. Restoring the correct arp table mappings
 
 FUTURE ENHANCEMENTS:
 Future enhancements would include capturing POST data, cookies, and additional HTTP methods
+
+For a portfolio piece, I'd keep it simple:
+
+No args initially - automatically scan subnet and capture both protocols
+Document "Future Features" in comments/README:
+
+Target specific IPs/ranges
+Protocol selection
+Multiple target support
+
+This shows you understand potential enhancements while delivering working code faster. Better to have a solid basic script now than get stuck perfecting features.
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='ARP Poisoner and Traffic sniffer tool', usage='%(prog)s [-h] --protocol {dns,http} [-i IP_ADDRESS]')
+    parser.add_argument('--protocol', required=True, choices=['dns', 'http'],help='Protocol to sniff (required)')
+    parser.add_argument('-i', '--ip', type=str, help='Target specific IP (optional, defaults to full subnet scan)')
+    return parser.parse_args()
+
+    # Main function
+if __name__ == "__main__":
+    args = parse_arguments()
+    if args.ip:
+        try:
+            ip = ipaddress.ip_address(args.ip)
+        except ValueError:
+            print("Invalid IP format")
+            sys.exit(1)
+    else:
+        subnet = get_subnet()
+        live_hosts = scan_subnet(subnet)
 
 '''
